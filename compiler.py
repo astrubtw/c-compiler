@@ -5,6 +5,7 @@ import subprocess
 
 
 class TokType(Enum):
+    # ONE CHAR OPERATORS
     OPEN_BRACE = auto()
     CLOSE_BRACE = auto()
     OPEN_PAREN = auto()
@@ -16,11 +17,27 @@ class TokType(Enum):
     ADDITION = auto()
     MULTIPLICATION = auto()
     DIVISION = auto()
+    LESS = auto()
+    GREATER = auto()
+    
+    # TWO CHAR OPERATORS
+    AND = auto()
+    OR = auto()
+    EQUAL = auto()
+    NOT_EQUAL = auto()
+    LESS_OR_EQ = auto()
+    GREATER_OR_EQ = auto()
 
+    # OTHER
     KEYWORD = auto()
     IDENTIFIER = auto()
     INT_LITERAL = auto()
-    
+
+
+def get_label() -> str:
+    get_label.index = getattr(get_label, 'index', 0) + 1
+    return ".L" + str(get_label.index)
+
 
 class Token():
     def __init__(self, type_: TokType, value: int | str = None) -> None:
@@ -64,7 +81,9 @@ class UnaryOperator():
         if self.op == TokType.BITW_COMPLIMENT:
             res += "\tnot rax\n"
         if self.op == TokType.LOGIC_NEGATION:
-            res += "\ttest rax, rax\n\tmov rax, 0\n\tsetz al\n"
+            res += "\ttest rax, rax\n"
+            res += "\tmov rax, 0\n"
+            res += "\tsetz al\n"
         
         return res
 
@@ -91,8 +110,47 @@ class BinaryOperator():
             res += "\txor rdx, rdx\n"
             res += "\txchg rbx, rax\n"
             res += "\tidiv rbx\n"
+        if self.op == TokType.EQUAL:
+            res += "\tcmp rbx, rax\n"
+            res += "\tsete al\n"
+        if self.op == TokType.NOT_EQUAL:
+            res += "\tcmp rbx, rax\n"
+            res += "\tsetne al\n"
+        if self.op == TokType.GREATER_OR_EQ:
+            res += "\tcmp rbx, rax\n"
+            res += "\tsetge al\n"
+        if self.op == TokType.GREATER:
+            res += "\tcmp rbx, rax\n"
+            res += "\tsetg al\n"
+        if self.op == TokType.LESS_OR_EQ:
+            res += "\tcmp rbx, rax\n"
+            res += "\tsetle al\n"
+        if self.op == TokType.LESS:
+            res += "\tcmp rbx, rax\n"
+            res += "\tsetl al\n"
+        if self.op == TokType.AND:
+            label = get_label()
+
+            res += "\ttest rbx, rbx\n"
+            res += "\tsetnz bl\n"
+            res += f"\tjz {label}\n"
+            res += "\ttest rax, rax\n"
+            res += "\tsetnz al\n"
+            res += f"\t{label}:\n"
+            res += "\tand al, bl\n"
+        if self.op == TokType.OR:
+            label = get_label()
+
+            res += "\ttest rbx, rbx\n"
+            res += "\tsetnz bl\n"
+            res += f"\tjnz {label}\n"
+            res += "\ttest rax, rax\n"
+            res += "\tsetnz al\n"
+            res += f"\t{label}:\n"
+            res += "\tor al, bl\n"
 
         return res
+
 
 class Return(Statement):
     def __init__(self, exp: Expression) -> None:
@@ -192,21 +250,64 @@ class SyntaxTree():
 
         match keyword.value:
             case "return":
-                exp = self.expression()
+                exp = self.or_comparison()
                 self.match_token(TokType.SEMICOLON)
 
                 return Return(exp)
+            
+    def or_comparison(self) -> Expression:
+        and_comparison = self.and_comparison()
+
+        while self.match_token(TokType.OR):
+            token = self.get_previous()
+            right = self.and_comparison()
+            and_comparison = BinaryOperator(and_comparison, token.type, right)
+        
+        return and_comparison
+            
+    
+    def and_comparison(self) -> Expression:
+        equality = self.equality()
+
+        while self.match_token(TokType.AND):
+            token = self.get_previous()
+            right = self.equality()
+            equality = BinaryOperator(equality, token.type, right)
+        
+        return equality
+
+            
+    def equality(self) -> Expression:
+        comparison = self.comparison()
+
+        while self.match_token(TokType.EQUAL, TokType.NOT_EQUAL):
+            token = self.get_previous()
+            right = self.comparison()
+            comparison = BinaryOperator(comparison, token.type, right)
+        
+        return comparison
+
+    
+    def comparison(self) -> Expression:
+        exp = self.expression()
+
+        while self.match_token(TokType.LESS, TokType.LESS_OR_EQ, TokType.GREATER, TokType.GREATER_OR_EQ):
+            token = self.get_previous()
+            right = self.expression()
+            exp = BinaryOperator(exp, token.type, right)
+        
+        return exp
 
 
     def expression(self) -> Expression:
-        exp = self.term()
+        term = self.term()
 
         while self.match_token(TokType.ADDITION, TokType.MINUS):
             token = self.get_previous()
             right = self.term()
-            exp = BinaryOperator(exp, token.type, right)
+            term = BinaryOperator(term, token.type, right)
 
-        return exp
+        return term
             
 
     def term(self) -> Expression:
@@ -264,13 +365,14 @@ class Compiler():
 
         file.close()
 
-        subprocess.run(["nasm", "-felf64", "assembly.asm"])
+        subprocess.run(["nasm", "-g", "-felf64", "assembly.asm"])
         subprocess.run(["ld", "-o", "assembly", "assembly.o"])
 
 
 def lex(file: TextIO) -> List[Token]:
     output = list()
-    operators = ["{", "}", "(", ")", ";", "-", "~", "!", "+", "*", "/"]
+    operators = ["{", "}", "(", ")", ";", "-", "~", "!", "+", "*", "/", "<", ">"]
+    operators_two = ["&&", "||", "==", "!=", "<=", ">="]
     keywords = ["return", "int"]
 
     for line in file:
@@ -291,10 +393,7 @@ def lex(file: TextIO) -> List[Token]:
                     cursor += 1
                 
                 value = int(line[0:cursor+1]) 
-            elif line[cursor] in operators:
-                index = operators.index(line[cursor])
-                token_type = TokType(index+1)
-            else:
+            elif line[cursor].isalpha():
                 word = re.search("[a-zA-Z]\w*", line)
 
                 if word is None:
@@ -309,7 +408,19 @@ def lex(file: TextIO) -> List[Token]:
                     token_type = TokType.KEYWORD
                 else:
                     token_type = TokType.IDENTIFIER
+            elif line[cursor] == ' ':
+                line = line[cursor+1:]
+                continue
+            elif line[cursor:cursor+2] in operators_two:
+                index = operators_two.index(line[cursor:cursor+2])
+                cursor += 1
+                token_type = TokType(len(operators) + index + 1)
+            elif line[cursor] in operators:
+                index = operators.index(line[cursor])
+                token_type = TokType(index+1)
 
+            if token_type is None:
+                print(line)
 
             assert token_type is not None, "Unknown token"
 
