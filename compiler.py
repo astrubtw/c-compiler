@@ -10,9 +10,12 @@ class TokType(Enum):
     OPEN_PAREN = auto()
     CLOSE_PAREN = auto()
     SEMICOLON = auto()
-    NEGATION = auto()
+    MINUS = auto()
     BITW_COMPLIMENT = auto()
     LOGIC_NEGATION = auto()
+    ADDITION = auto()
+    MULTIPLICATION = auto()
+    DIVISION = auto()
 
     KEYWORD = auto()
     IDENTIFIER = auto()
@@ -40,21 +43,12 @@ class Constant():
         self.value = value
 
 
-class UnaryOperator():
-    pass
-
-
 class Expression():
-    def __init__(self, value: UnaryOperator | Constant) -> None:
+    def __init__(self, value: Constant) -> None:
         self.value = value
 
     def compile(self) -> str:
-        if isinstance(self.value, Constant):
-            return f"\tmov rax, {self.value.value}\n"
-
-        res = self.value.compile()
-        return res
-
+        return f"\tmov rax, {self.value.value}\n"
 
 
 class UnaryOperator():
@@ -62,6 +56,43 @@ class UnaryOperator():
         self.op = op
         self.exp = exp
 
+    def compile(self) -> str:
+        res = self.exp.compile()
+
+        if self.op == TokType.MINUS:
+            res += "\tneg rax\n"
+        if self.op == TokType.BITW_COMPLIMENT:
+            res += "\tnot rax\n"
+        if self.op == TokType.LOGIC_NEGATION:
+            res += "\ttest rax, rax\n\tmov rax, 0\n\tsetz al\n"
+        
+        return res
+
+
+class BinaryOperator():
+    def __init__(self, exp: Expression, op: TokType, right: Expression) -> None:
+        self.exp = exp
+        self.op = op
+        self.right = right
+
+    def compile(self) -> str:
+        res = self.exp.compile()
+        res += "\tmov rbx, rax\n"
+        res += self.right.compile()
+
+        if self.op == TokType.ADDITION:
+            res += "\tadd rax, rbx\n"
+        if self.op == TokType.MINUS:
+            res += "\tsub rbx, rax\n"
+            res += "\tmov rax, rbx\n"
+        if self.op == TokType.MULTIPLICATION:
+            res += "\timul rbx\n"
+        if self.op == TokType.DIVISION:
+            res += "\txor rdx, rdx\n"
+            res += "\txchg rbx, rax\n"
+            res += "\tidiv rbx\n"
+
+        return res
 
 class Return(Statement):
     def __init__(self, exp: Expression) -> None:
@@ -97,7 +128,6 @@ class Program():
 
 class SyntaxTree():
     def __init__(self, tokens: List[Token]) -> None:
-        #tokens.insert(0, Token(TokType.SEMICOLON))
         self.tokens = tokens
         self.current = 0
         self.parse()
@@ -124,7 +154,6 @@ class SyntaxTree():
                 self.current += 1
                 return True
         
-        self.error("Unexpected token")
         return False
     
 
@@ -167,19 +196,50 @@ class SyntaxTree():
                 self.match_token(TokType.SEMICOLON)
 
                 return Return(exp)
+
+
+    def expression(self) -> Expression:
+        exp = self.term()
+
+        while self.match_token(TokType.ADDITION, TokType.MINUS):
+            token = self.get_previous()
+            right = self.term()
+            exp = BinaryOperator(exp, token.type, right)
+
+        return exp
             
-    
-    def expression(self) -> Expression | UnaryOperator:
-        if self.check_token(TokType.INT_LITERAL):
-            self.advance()
+
+    def term(self) -> Expression:
+        factor = self.factor()
+
+        while self.match_token(TokType.MULTIPLICATION, TokType.DIVISION):
+            token = self.get_previous()
+            right = self.factor()
+            factor = BinaryOperator(factor, token.type, right)
+
+        return factor
+
+
+    def factor(self) -> Expression:
+        if self.match_token(TokType.OPEN_PAREN):
+            exp = self.expression()
+
+            if not self.match_token(TokType.CLOSE_PAREN):
+                self.error("No closing parenthesis")
+
+            return exp
+
+        if self.match_token(TokType.INT_LITERAL):
             value = self.get_previous().value
             return Expression(Constant(value))
         
-        self.match_token(TokType.BITW_COMPLIMENT, TokType.NEGATION, TokType.LOGIC_NEGATION)
-        op = self.get_previous()
-        exp = self.expression()
+        if self.match_token(TokType.BITW_COMPLIMENT, TokType.MINUS, TokType.LOGIC_NEGATION):
+            op = self.get_previous()
+            exp = self.factor()
 
-        return UnaryOperator(op, exp)
+            return UnaryOperator(op.type, exp)
+        
+        self.error()
     
 
     def parse(self):
@@ -210,7 +270,7 @@ class Compiler():
 
 def lex(file: TextIO) -> List[Token]:
     output = list()
-    operators = ["{", "}", "(", ")", ";", "-", "~", "!"]
+    operators = ["{", "}", "(", ")", ";", "-", "~", "!", "+", "*", "/"]
     keywords = ["return", "int"]
 
     for line in file:
@@ -264,9 +324,10 @@ file = open("return_2.c", "r")
 tokens = lex(file)
 print(tokens)
 
+file.close()
+
 ast = SyntaxTree(tokens)
 
 com = Compiler(ast)
 com.compile()
 
-file.close()
