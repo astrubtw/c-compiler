@@ -98,8 +98,9 @@ class BinaryOperator():
 
     def compile(self) -> str:
         res = self.exp.compile()
-        res += "\tmov rbx, rax\n"
+        res += "\tpush rax\n"
         res += self.right.compile()
+        res += "\tpop rbx\n"
 
         if self.op == TokType.ADDITION:
             res += "\tadd rax, rbx\n"
@@ -143,7 +144,7 @@ class BinaryOperator():
             res += f"\tjz {label}\n"
             res += "\ttest rax, rax\n"
             res += "\tsetnz al\n"
-            res += f"\t{label}:\n"
+            res += label + ":\n"
             res += "\tand al, bl\n"
         if self.op == TokType.OR:
             label = get_label()
@@ -153,7 +154,7 @@ class BinaryOperator():
             res += f"\tjnz {label}\n"
             res += "\ttest rax, rax\n"
             res += "\tsetnz al\n"
-            res += f"\t{label}:\n"
+            res += label + ":\n"
             res += "\tor al, bl\n"
 
         return res
@@ -241,22 +242,29 @@ class Conditional():
         
         res += self.exp.compile()
 
-        label = get_label()
+        label_else = None
+        label_end = get_label()
 
         res += "\ttest al, al\n"
-        res += f"\tjz {label}\n"
+
+        if self.statement_option:
+            label_else = get_label()
+            res += f"\tjz {label_else}\n"
+        else:
+            res += f"\tjz {label_end}\n"
 
         res += "\t; STATEMENT\n"
 
         res += self.statement.compile()
-
-        res += f"{label}:\n"
+        res += f"\tjz {label_end}\n"
 
         if self.statement_option:
             res += "\t; ELSE\n"
+            res += label_else + ":\n"
             res += self.statement_option.compile()
 
         res += "\t; ENDIF\n"
+        res += label_end + ":\n"
 
         return res
 
