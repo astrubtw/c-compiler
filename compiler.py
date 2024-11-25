@@ -19,6 +19,8 @@ class TokType(Enum):
     DIVISION = auto()
     LESS = auto()
     GREATER = auto()
+    MODULO = auto()
+    ASSIGNMENT = auto()
     
     # TWO CHAR OPERATORS
     AND = auto()
@@ -37,6 +39,11 @@ class TokType(Enum):
 def get_label() -> str:
     get_label.index = getattr(get_label, 'index', 0) + 1
     return ".L" + str(get_label.index)
+
+
+variable_map = dict()
+
+variable_offset = 0
 
 
 class Token():
@@ -59,17 +66,12 @@ class Constant():
     def __init__(self, value: int) -> None:
         self.value = value
 
-
-class Expression():
-    def __init__(self, value: Constant) -> None:
-        self.value = value
-
     def compile(self) -> str:
-        return f"\tmov rax, {self.value.value}\n"
+        return f"\tmov rax, {self.value}\n"
 
 
 class UnaryOperator():
-    def __init__(self, op: TokType, exp: Expression) -> None:
+    def __init__(self, op: TokType, exp) -> None:
         self.op = op
         self.exp = exp
 
@@ -89,7 +91,7 @@ class UnaryOperator():
 
 
 class BinaryOperator():
-    def __init__(self, exp: Expression, op: TokType, right: Expression) -> None:
+    def __init__(self, exp, op: TokType, right) -> None:
         self.exp = exp
         self.op = op
         self.right = right
@@ -110,6 +112,11 @@ class BinaryOperator():
             res += "\txor rdx, rdx\n"
             res += "\txchg rbx, rax\n"
             res += "\tidiv rbx\n"
+        if self.op == TokType.MODULO:
+            res += "\txor rdx, rdx\n"
+            res += "\txchg rbx, rax\n"
+            res += "\tidiv rbx\n"
+            res += "\tmov rax, rdx\n"
         if self.op == TokType.EQUAL:
             res += "\tcmp rbx, rax\n"
             res += "\tsete al\n"
@@ -153,13 +160,106 @@ class BinaryOperator():
 
 
 class Return(Statement):
-    def __init__(self, exp: Expression) -> None:
+    def __init__(self, exp) -> None:
         self.exp = exp
 
     def compile(self) -> str:
         res = self.exp.compile()
 
+        res += "\tjmp .Le\n"
+
         return res
+    
+
+class Declare(Statement):
+    def __init__(self, variable: Token, exp) -> None:
+        self.exp = exp
+        self.variable = variable
+
+    def compile(self) -> str:
+        if self.exp:
+            res = self.exp.compile()
+        else:
+            res = "\tmov rax, 0\n"
+        
+        identifier = self.variable.value
+
+        global variable_offset
+        variable_offset += 8
+
+        global variable_map
+        variable_map[identifier] = variable_offset
+
+        res += "\tsub rsp, 8\n"
+        res += f"\tmov [rbp - {variable_offset}], rax\n"
+
+        return res
+
+
+class Variable():
+    def __init__(self, variable: Token) -> None:
+        self.variable = variable
+
+    def compile(self) -> str:
+        identifier = self.variable.value
+
+        global variable_map
+        offset = variable_map[identifier]
+
+        res = f"\tmov rax, [rbp - {offset}]\n"
+
+        return res
+    
+
+class Assign():
+    def __init__(self, variable: Token, exp) -> None:
+        self.exp = exp
+        self.variable = variable
+
+    def compile(self) -> str:
+        res = self.exp.compile()
+
+        identifier = self.variable.value
+
+        global variable_map
+        offset = variable_map[identifier]
+
+        res += f"\tmov [rbp - {offset}], rax\n"
+
+        return res
+    
+
+class Conditional():
+    def __init__(self, exp, statement, statement_option) -> None:
+        self.exp = exp
+        self.statement = statement
+        self.statement_option = statement_option
+
+
+    def compile(self) -> str:
+        res = "\t; IF CONDITION\n"
+        
+        res += self.exp.compile()
+
+        label = get_label()
+
+        res += "\ttest al, al\n"
+        res += f"\tjz {label}\n"
+
+        res += "\t; STATEMENT\n"
+
+        res += self.statement.compile()
+
+        res += f"{label}:\n"
+
+        if self.statement_option:
+            res += "\t; ELSE\n"
+            res += self.statement_option.compile()
+
+        res += "\t; ENDIF\n"
+
+        return res
+
 
 
 class Function():
@@ -171,9 +271,21 @@ class Function():
     def compile(self) -> str:
         res = f"{self.name}:\n"
 
+        res += "\tpush rbp\n"
+        res += "\tmov rbp, rsp\n"
+
         for statement in self.body:
             res += statement.compile()
 
+        res += ".Le:\n"
+
+        global variable_offset
+
+        if variable_offset > 0:
+            res += f"\tadd rsp, {variable_offset}\n"
+            variable_offset = 0
+
+        res += "\tpop rbp\n"
         res += "\tret\n"
 
         return res
@@ -190,12 +302,20 @@ class SyntaxTree():
         self.current = 0
         self.parse()
 
+
+    def parse(self):
+        self.root = self.program()
+
+
     def error(self, msg: str):
         raise Exception(msg)
 
 
     def advance(self):
         self.current += 1
+
+    def rewind(self):
+        self.current -= 1
 
 
     def get_current(self) -> Token:
@@ -214,6 +334,11 @@ class SyntaxTree():
         
         return False
     
+
+    def consume(self, token: TokType):
+        if not self.match_token(token):
+            self.error("Expected token: " + token.name)
+
 
     def check_token(self, type: TokType) -> bool:
         return self.get_current().type == type
@@ -237,25 +362,93 @@ class SyntaxTree():
         body = list()
 
         while not self.check_token(TokType.CLOSE_BRACE):
-            body.append(self.statement())
+            body.append(self.block_item())
 
         self.match_token(TokType.CLOSE_BRACE)
 
         return Function(identifier.value, body)
     
 
-    def statement(self) -> Statement:
-        self.match_token(TokType.KEYWORD)
-        keyword = self.get_previous()
+    def block_item(self):
+        if self.match_token(TokType.KEYWORD):
+            keyword = self.get_previous()
 
-        match keyword.value:
-            case "return":
-                exp = self.or_comparison()
-                self.match_token(TokType.SEMICOLON)
-
-                return Return(exp)
+            if keyword.value == "int":
+                return self.declaration()
             
-    def or_comparison(self) -> Expression:
+            self.rewind()
+            
+        return self.statement()
+
+
+    def declaration(self):
+        self.consume(TokType.IDENTIFIER)
+
+        identifier = self.get_previous()
+        exp = None
+
+        if self.match_token(TokType.ASSIGNMENT):
+            exp = self.expression()
+
+        self.consume(TokType.SEMICOLON)
+
+        return Declare(identifier, exp)
+    
+
+    def statement(self) -> Statement:
+        if self.match_token(TokType.KEYWORD):
+            keyword = self.get_previous()
+
+            match keyword.value:
+                case "return":
+                    exp = self.expression()
+
+                    self.consume(TokType.SEMICOLON)
+
+                    return Return(exp)
+                
+                case "if":
+                    self.consume(TokType.OPEN_PAREN)
+
+                    exp = self.expression()
+
+                    self.consume(TokType.CLOSE_PAREN)
+
+                    if_block = self.statement()
+
+                    if not self.match_token(TokType.KEYWORD):
+                        return Conditional(exp, if_block, None)
+                    
+                    keyword = self.get_previous()
+
+                    if keyword.value != "else":
+                        self.rewind()
+                        return Conditional(exp, if_block, None)
+
+                    else_block = self.statement()
+
+                    return Conditional(exp, if_block, else_block)
+
+
+        exp = self.expression()
+        self.consume(TokType.SEMICOLON)
+
+        return exp
+
+    
+    def expression(self):
+        if self.match_token(TokType.IDENTIFIER):
+            identifier = self.get_previous()
+
+            if self.match_token(TokType.ASSIGNMENT):
+                return Assign(identifier, self.expression())
+            
+            self.rewind()
+
+        return self.or_comparison()
+            
+
+    def or_comparison(self):
         and_comparison = self.and_comparison()
 
         while self.match_token(TokType.OR):
@@ -266,7 +459,7 @@ class SyntaxTree():
         return and_comparison
             
     
-    def and_comparison(self) -> Expression:
+    def and_comparison(self):
         equality = self.equality()
 
         while self.match_token(TokType.AND):
@@ -277,7 +470,7 @@ class SyntaxTree():
         return equality
 
             
-    def equality(self) -> Expression:
+    def equality(self):
         comparison = self.comparison()
 
         while self.match_token(TokType.EQUAL, TokType.NOT_EQUAL):
@@ -288,18 +481,18 @@ class SyntaxTree():
         return comparison
 
     
-    def comparison(self) -> Expression:
-        exp = self.expression()
+    def comparison(self):
+        exp = self.add_expression()
 
         while self.match_token(TokType.LESS, TokType.LESS_OR_EQ, TokType.GREATER, TokType.GREATER_OR_EQ):
             token = self.get_previous()
-            right = self.expression()
+            right = self.add_expression()
             exp = BinaryOperator(exp, token.type, right)
         
         return exp
 
 
-    def expression(self) -> Expression:
+    def add_expression(self):
         term = self.term()
 
         while self.match_token(TokType.ADDITION, TokType.MINUS):
@@ -310,10 +503,10 @@ class SyntaxTree():
         return term
             
 
-    def term(self) -> Expression:
+    def term(self):
         factor = self.factor()
 
-        while self.match_token(TokType.MULTIPLICATION, TokType.DIVISION):
+        while self.match_token(TokType.MULTIPLICATION, TokType.DIVISION, TokType.MODULO):
             token = self.get_previous()
             right = self.factor()
             factor = BinaryOperator(factor, token.type, right)
@@ -321,9 +514,9 @@ class SyntaxTree():
         return factor
 
 
-    def factor(self) -> Expression:
+    def factor(self):
         if self.match_token(TokType.OPEN_PAREN):
-            exp = self.expression()
+            exp = self.or_comparison()
 
             if not self.match_token(TokType.CLOSE_PAREN):
                 self.error("No closing parenthesis")
@@ -332,19 +525,20 @@ class SyntaxTree():
 
         if self.match_token(TokType.INT_LITERAL):
             value = self.get_previous().value
-            return Expression(Constant(value))
+            return Constant(value)
         
+        if self.match_token(TokType.IDENTIFIER):
+            identifier = self.get_previous()
+            return Variable(identifier)
+
         if self.match_token(TokType.BITW_COMPLIMENT, TokType.MINUS, TokType.LOGIC_NEGATION):
             op = self.get_previous()
             exp = self.factor()
 
             return UnaryOperator(op.type, exp)
         
-        self.error()
-    
+        self.error("Failed on token: " + self.get_current().type.name + " Index: " + str(self.current))
 
-    def parse(self):
-        self.root = self.program()
 
 
 class Compiler():
@@ -371,9 +565,9 @@ class Compiler():
 
 def lex(file: TextIO) -> List[Token]:
     output = list()
-    operators = ["{", "}", "(", ")", ";", "-", "~", "!", "+", "*", "/", "<", ">"]
+    operators = ["{", "}", "(", ")", ";", "-", "~", "!", "+", "*", "/", "<", ">", "%", "="]
     operators_two = ["&&", "||", "==", "!=", "<=", ">="]
-    keywords = ["return", "int"]
+    keywords = ["return", "int", "if", "else"]
 
     for line in file:
         line = line.strip("\n")
