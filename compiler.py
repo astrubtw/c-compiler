@@ -1,348 +1,15 @@
-from types import MappingProxyType
 from typing import TextIO, List
-from enum import Enum, auto
 import re
 import subprocess
-import copy
-import abc
+from tokenclass import TokType, Token
 
-
-class TokType(Enum):
-    # ONE CHAR OPERATORS
-    OPEN_BRACE = auto()
-    CLOSE_BRACE = auto()
-    OPEN_PAREN = auto()
-    CLOSE_PAREN = auto()
-    SEMICOLON = auto()
-    MINUS = auto()
-    BITW_COMPLIMENT = auto()
-    LOGIC_NEGATION = auto()
-    ADDITION = auto()
-    MULTIPLICATION = auto()
-    DIVISION = auto()
-    LESS = auto()
-    GREATER = auto()
-    MODULO = auto()
-    ASSIGNMENT = auto()
-    
-    # TWO CHAR OPERATORS
-    AND = auto()
-    OR = auto()
-    EQUAL = auto()
-    NOT_EQUAL = auto()
-    LESS_OR_EQ = auto()
-    GREATER_OR_EQ = auto()
-
-    # OTHER
-    KEYWORD = auto()
-    IDENTIFIER = auto()
-    INT_LITERAL = auto()
-
-
-def get_label() -> str:
-    get_label.index = getattr(get_label, 'index', 0) + 1
-    return ".L" + str(get_label.index)
-
-
-class VariableDefinedError(Exception):
-    """Variable already defined in scope."""
-
-
-class Token():
-    def __init__(self, type_: TokType, value: int | str = None) -> None:
-        self.type = type_
-        self.value = value
-
-    def __repr__(self) -> str:
-        if self.value:
-            return f"{self.type.name}[{self.value}]"
-        
-        return f"{self.type.name}"
-
-
-class AstNode(abc.ABC):
-    @abc.abstractclassmethod
-    def compile(self, var_map: dict, stack_offset: int) -> tuple[str, dict, int]:
-        return "\t; NOT IMPLEMENTED\n", var_map, stack_offset
-
-
-class Constant(AstNode):
-    def __init__(self, value: int) -> None:
-        self.value = value
-
-    def compile(self, var_map, stack_offset) -> str:
-        return f"\tmov rax, {self.value}\n", var_map, stack_offset
-
-
-class UnaryOperator(AstNode):
-    def __init__(self, op: TokType, exp) -> None:
-        self.op = op
-        self.exp = exp
-
-    def compile(self, var_map, stack_offset) -> str:
-        res, var_map, stack_offset = self.exp.compile(var_map, stack_offset)
-
-        if self.op == TokType.MINUS:
-            res += "\tneg rax\n"
-        if self.op == TokType.BITW_COMPLIMENT:
-            res += "\tnot rax\n"
-        if self.op == TokType.LOGIC_NEGATION:
-            res += "\ttest rax, rax\n"
-            res += "\tmov rax, 0\n"
-            res += "\tsetz al\n"
-        
-        return res, var_map, stack_offset
-
-
-class BinaryOperator(AstNode):
-    def __init__(self, exp, op: TokType, right) -> None:
-        self.exp = exp
-        self.op = op
-        self.right = right
-
-    def compile(self, var_map, stack_offset):
-        res, var_map, stack_offset = self.exp.compile(var_map, stack_offset)
-        res += "\tpush rax\n"
-
-        code, var_map, stack_offset = self.right.compile(var_map, stack_offset)
-        res += code
-        res += "\tpop rbx\n"
-
-        if self.op == TokType.ADDITION:
-            res += "\tadd rax, rbx\n"
-        if self.op == TokType.MINUS:
-            res += "\tsub rbx, rax\n"
-            res += "\tmov rax, rbx\n"
-        if self.op == TokType.MULTIPLICATION:
-            res += "\timul rbx\n"
-        if self.op == TokType.DIVISION:
-            res += "\txor rdx, rdx\n"
-            res += "\txchg rbx, rax\n"
-            res += "\tidiv rbx\n"
-        if self.op == TokType.MODULO:
-            res += "\txor rdx, rdx\n"
-            res += "\txchg rbx, rax\n"
-            res += "\tidiv rbx\n"
-            res += "\tmov rax, rdx\n"
-        if self.op == TokType.EQUAL:
-            res += "\tcmp rbx, rax\n"
-            res += "\tsete al\n"
-        if self.op == TokType.NOT_EQUAL:
-            res += "\tcmp rbx, rax\n"
-            res += "\tsetne al\n"
-        if self.op == TokType.GREATER_OR_EQ:
-            res += "\tcmp rbx, rax\n"
-            res += "\tsetge al\n"
-        if self.op == TokType.GREATER:
-            res += "\tcmp rbx, rax\n"
-            res += "\tsetg al\n"
-        if self.op == TokType.LESS_OR_EQ:
-            res += "\tcmp rbx, rax\n"
-            res += "\tsetle al\n"
-        if self.op == TokType.LESS:
-            res += "\tcmp rbx, rax\n"
-            res += "\tsetl al\n"
-        if self.op == TokType.AND:
-            label = get_label()
-
-            res += "\ttest rbx, rbx\n"
-            res += "\tsetnz bl\n"
-            res += f"\tjz {label}\n"
-            res += "\ttest rax, rax\n"
-            res += "\tsetnz al\n"
-            res += label + ":\n"
-            res += "\tand al, bl\n"
-        if self.op == TokType.OR:
-            label = get_label()
-
-            res += "\ttest rbx, rbx\n"
-            res += "\tsetnz bl\n"
-            res += f"\tjnz {label}\n"
-            res += "\ttest rax, rax\n"
-            res += "\tsetnz al\n"
-            res += label + ":\n"
-            res += "\tor al, bl\n"
-
-        return res, var_map, stack_offset
-
-
-class Return(AstNode):
-    def __init__(self, exp) -> None:
-        self.exp = exp
-
-    def compile(self, var_map, stack_offset):
-        res, var_map, stack_offset = self.exp.compile(var_map, stack_offset)
-
-        res += "\tjmp .Le\n"
-
-        return res, var_map, stack_offset
-    
-
-class Declare(AstNode):
-    def __init__(self, variable: Token, exp) -> None:
-        self.exp = exp
-        self.variable = variable
-
-    def compile(self, var_map, stack_offset):
-        if self.exp:
-            res, var_map, stack_offset = self.exp.compile(var_map, stack_offset)
-        else:
-            res = "\tmov rax, 0\n"
-        
-        identifier = self.variable.value
-
-        stack_offset += 8
-
-        new_map = copy.deepcopy(var_map)
-        new_map[identifier] = stack_offset
-
-        res += "\tsub rsp, 8\n"
-        res += f"\tmov [rbp - {stack_offset}], rax\n"
-
-        return res, new_map, stack_offset
-
-
-class Variable(AstNode):
-    def __init__(self, variable: Token) -> None:
-        self.variable = variable
-
-    def compile(self, var_map, stack_offset):
-        identifier = self.variable.value
-
-        offset = var_map[identifier]
-
-        res = f"\tmov rax, [rbp - {offset}]\n"
-
-        return res, var_map, stack_offset
-    
-
-class Assign(AstNode):
-    def __init__(self, variable: Token, exp) -> None:
-        self.exp = exp
-        self.variable = variable
-
-    def compile(self, var_map, stack_offset):
-        res, var_map, stack_offset = self.exp.compile(var_map, stack_offset)
-
-        identifier = self.variable.value
-
-        offset = var_map[identifier]
-
-        res += f"\tmov [rbp - {offset}], rax\n"
-
-        return res, var_map, stack_offset
-    
-
-class Conditional(AstNode):
-    def __init__(self, exp, statement, statement_option) -> None:
-        self.exp = exp
-        self.statement = statement
-        self.statement_option = statement_option
-
-
-    def compile(self, var_map, stack_offset):
-        res = "\t; IF CONDITION\n"
-
-        code, var_map, stack_offset = self.exp.compile(var_map, stack_offset)
-        res += code
-
-        label_else = None
-        label_end = get_label()
-
-        res += "\ttest al, al\n"
-
-        if self.statement_option:
-            label_else = get_label()
-            res += f"\tjz {label_else}\n"
-        else:
-            res += f"\tjz {label_end}\n"
-
-        res += "\t; STATEMENT\n"
-        
-        code, var_map, stack_offset = self.statement.compile(var_map, stack_offset)
-        res += code
-
-        res += f"\tjmp {label_end}\n"
-
-        if self.statement_option:
-            res += "\t; ELSE\n"
-            res += label_else + ":\n"
-
-            code, var_map, stack_offset = self.statement_option.compile(var_map, stack_offset)
-            res += code
-
-        res += "\t; ENDIF\n"
-        res += label_end + ":\n"
-
-        return res, var_map, stack_offset
-
-
-class Compound(AstNode):
-    def __init__(self, block: List, function: bool) -> None:
-        self.block = block
-        self.function = function
-
-    def compile(self, var_map, stack_offset):
-        res = ""
-        scope = set()
-
-        for item in self.block:
-            if type(item) is Declare:
-                if item.variable.value in scope:
-                    raise VariableDefinedError
-                
-                scope.add(item.variable.value)
-                code, var_map, stack_offset = item.compile(var_map, stack_offset)
-                res += code
-            else:
-                code, _, _ = item.compile(var_map, stack_offset)
-                res += code
-
-        if len(scope) > 0 and not self.function:
-            dealocated = len(scope) * 8
-            
-            res += f"\tadd rsp, {dealocated}\n"
-            stack_offset -= dealocated
-        
-        return res, var_map, stack_offset
-
-
-class Function():
-    def __init__(self, name: str, body: Compound) -> None:
-        self.name = name
-        self.body = body
-
-
-    def compile(self) -> str:
-        var_map = dict()
-        stack_offset = 0
-
-        res = f"{self.name}:\n"
-
-        res += "\tpush rbp\n"
-        res += "\tmov rbp, rsp\n"
-
-        code, var_map, stack_offset = self.body.compile(var_map, stack_offset)
-
-        res += code
-
-        res += ".Le:\n"
-
-        if stack_offset > 0:
-            res += f"\tadd rsp, {stack_offset}\n"
-
-        res += "\tpop rbp\n"
-        res += "\tret\n"
-
-        return res
-
-
-class Program():
-    def __init__(self, entry: Function) -> None:
-        self.entry = entry
+from astnodes import Constant, UnaryOperator, BinaryOperator, Return, Declare, Variable, Assign, Conditional, Compound, Function, Program
 
 
 class SyntaxTree():
+    class ParsingError(Exception):
+        """Error while parsing"""
+
     def __init__(self, tokens: List[Token]) -> None:
         self.tokens = tokens
         self.current = 0
@@ -354,7 +21,7 @@ class SyntaxTree():
 
 
     def error(self, msg: str):
-        raise Exception(msg)
+        raise self.ParsingError(msg)
 
 
     def advance(self):
@@ -604,26 +271,19 @@ class SyntaxTree():
 
 
 
-class Compiler():
-    def __init__(self, ast: SyntaxTree) -> None:
-        self.ast = ast
+def compile_tree(ast: SyntaxTree):
+    file = open("assembly.asm", "w")
+    file.write("section .text\n\nglobal _start\n\n")
 
+    text = ast.root.entry.compile()
+    file.write(text)
 
-    def compile(self):
-        file = open("assembly.asm", "w")
-        file.write("section .text\n\nglobal _start\n\n")
+    file.write("_start:\n\tcall main\n\tmov rdi, rax\n\tmov rax, 60\n\tsyscall")
 
-        root = self.ast.root
+    file.close()
 
-        text = root.entry.compile()
-        file.write(text)
-
-        file.write("_start:\n\tcall main\n\tmov rdi, rax\n\tmov rax, 60\n\tsyscall")
-
-        file.close()
-
-        subprocess.run(["nasm", "-g", "-felf64", "assembly.asm"])
-        subprocess.run(["ld", "-o", "assembly", "assembly.o"])
+    subprocess.run(["nasm", "-g", "-felf64", "assembly.asm"])
+    subprocess.run(["ld", "-o", "assembly", "assembly.o"])
 
 
 def lex(file: TextIO) -> List[Token]:
@@ -687,15 +347,14 @@ def lex(file: TextIO) -> List[Token]:
     return output
 
 
-file = open("return_2.c", "r")
+if __name__ == "__main__":
+    file = open("return_2.c", "r")
 
-tokens = lex(file)
-print(tokens)
+    tokens = lex(file)
+    print(tokens)
 
-file.close()
+    file.close()
 
-ast = SyntaxTree(tokens)
+    ast = SyntaxTree(tokens)
 
-com = Compiler(ast)
-com.compile()
-
+    compile_tree(ast)

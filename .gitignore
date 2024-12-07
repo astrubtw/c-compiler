@@ -2,3 +2,4 @@ assembly*
 old_compiler.py
 *.c
 *.txt
+__pycache__
