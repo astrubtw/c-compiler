@@ -1,7 +1,10 @@
+from types import MappingProxyType
 from typing import TextIO, List
 from enum import Enum, auto
 import re
 import subprocess
+import copy
+import abc
 
 
 class TokType(Enum):
@@ -41,9 +44,8 @@ def get_label() -> str:
     return ".L" + str(get_label.index)
 
 
-variable_map = dict()
-
-variable_offset = 0
+class VariableDefinedError(Exception):
+    """Variable already defined in scope."""
 
 
 class Token():
@@ -58,25 +60,27 @@ class Token():
         return f"{self.type.name}"
 
 
-class Statement():
-    pass
+class AstNode(abc.ABC):
+    @abc.abstractclassmethod
+    def compile(self, var_map: dict, stack_offset: int) -> tuple[str, dict, int]:
+        return "\t; NOT IMPLEMENTED\n", var_map, stack_offset
 
 
-class Constant():
+class Constant(AstNode):
     def __init__(self, value: int) -> None:
         self.value = value
 
-    def compile(self) -> str:
-        return f"\tmov rax, {self.value}\n"
+    def compile(self, var_map, stack_offset) -> str:
+        return f"\tmov rax, {self.value}\n", var_map, stack_offset
 
 
-class UnaryOperator():
+class UnaryOperator(AstNode):
     def __init__(self, op: TokType, exp) -> None:
         self.op = op
         self.exp = exp
 
-    def compile(self) -> str:
-        res = self.exp.compile()
+    def compile(self, var_map, stack_offset) -> str:
+        res, var_map, stack_offset = self.exp.compile(var_map, stack_offset)
 
         if self.op == TokType.MINUS:
             res += "\tneg rax\n"
@@ -87,19 +91,21 @@ class UnaryOperator():
             res += "\tmov rax, 0\n"
             res += "\tsetz al\n"
         
-        return res
+        return res, var_map, stack_offset
 
 
-class BinaryOperator():
+class BinaryOperator(AstNode):
     def __init__(self, exp, op: TokType, right) -> None:
         self.exp = exp
         self.op = op
         self.right = right
 
-    def compile(self) -> str:
-        res = self.exp.compile()
+    def compile(self, var_map, stack_offset):
+        res, var_map, stack_offset = self.exp.compile(var_map, stack_offset)
         res += "\tpush rax\n"
-        res += self.right.compile()
+
+        code, var_map, stack_offset = self.right.compile(var_map, stack_offset)
+        res += code
         res += "\tpop rbx\n"
 
         if self.op == TokType.ADDITION:
@@ -157,90 +163,88 @@ class BinaryOperator():
             res += label + ":\n"
             res += "\tor al, bl\n"
 
-        return res
+        return res, var_map, stack_offset
 
 
-class Return(Statement):
+class Return(AstNode):
     def __init__(self, exp) -> None:
         self.exp = exp
 
-    def compile(self) -> str:
-        res = self.exp.compile()
+    def compile(self, var_map, stack_offset):
+        res, var_map, stack_offset = self.exp.compile(var_map, stack_offset)
 
         res += "\tjmp .Le\n"
 
-        return res
+        return res, var_map, stack_offset
     
 
-class Declare(Statement):
+class Declare(AstNode):
     def __init__(self, variable: Token, exp) -> None:
         self.exp = exp
         self.variable = variable
 
-    def compile(self) -> str:
+    def compile(self, var_map, stack_offset):
         if self.exp:
-            res = self.exp.compile()
+            res, var_map, stack_offset = self.exp.compile(var_map, stack_offset)
         else:
             res = "\tmov rax, 0\n"
         
         identifier = self.variable.value
 
-        global variable_offset
-        variable_offset += 8
+        stack_offset += 8
 
-        global variable_map
-        variable_map[identifier] = variable_offset
+        new_map = copy.deepcopy(var_map)
+        new_map[identifier] = stack_offset
 
         res += "\tsub rsp, 8\n"
-        res += f"\tmov [rbp - {variable_offset}], rax\n"
+        res += f"\tmov [rbp - {stack_offset}], rax\n"
 
-        return res
+        return res, new_map, stack_offset
 
 
-class Variable():
+class Variable(AstNode):
     def __init__(self, variable: Token) -> None:
         self.variable = variable
 
-    def compile(self) -> str:
+    def compile(self, var_map, stack_offset):
         identifier = self.variable.value
 
-        global variable_map
-        offset = variable_map[identifier]
+        offset = var_map[identifier]
 
         res = f"\tmov rax, [rbp - {offset}]\n"
 
-        return res
+        return res, var_map, stack_offset
     
 
-class Assign():
+class Assign(AstNode):
     def __init__(self, variable: Token, exp) -> None:
         self.exp = exp
         self.variable = variable
 
-    def compile(self) -> str:
-        res = self.exp.compile()
+    def compile(self, var_map, stack_offset):
+        res, var_map, stack_offset = self.exp.compile(var_map, stack_offset)
 
         identifier = self.variable.value
 
-        global variable_map
-        offset = variable_map[identifier]
+        offset = var_map[identifier]
 
         res += f"\tmov [rbp - {offset}], rax\n"
 
-        return res
+        return res, var_map, stack_offset
     
 
-class Conditional():
+class Conditional(AstNode):
     def __init__(self, exp, statement, statement_option) -> None:
         self.exp = exp
         self.statement = statement
         self.statement_option = statement_option
 
 
-    def compile(self) -> str:
+    def compile(self, var_map, stack_offset):
         res = "\t; IF CONDITION\n"
-        
-        res += self.exp.compile()
+
+        code, var_map, stack_offset = self.exp.compile(var_map, stack_offset)
+        res += code
 
         label_else = None
         label_end = get_label()
@@ -254,44 +258,78 @@ class Conditional():
             res += f"\tjz {label_end}\n"
 
         res += "\t; STATEMENT\n"
+        
+        code, var_map, stack_offset = self.statement.compile(var_map, stack_offset)
+        res += code
 
-        res += self.statement.compile()
-        res += f"\tjz {label_end}\n"
+        res += f"\tjmp {label_end}\n"
 
         if self.statement_option:
             res += "\t; ELSE\n"
             res += label_else + ":\n"
-            res += self.statement_option.compile()
+
+            code, var_map, stack_offset = self.statement_option.compile(var_map, stack_offset)
+            res += code
 
         res += "\t; ENDIF\n"
         res += label_end + ":\n"
 
-        return res
+        return res, var_map, stack_offset
 
+
+class Compound(AstNode):
+    def __init__(self, block: List, function: bool) -> None:
+        self.block = block
+        self.function = function
+
+    def compile(self, var_map, stack_offset):
+        res = ""
+        scope = set()
+
+        for item in self.block:
+            if type(item) is Declare:
+                if item.variable.value in scope:
+                    raise VariableDefinedError
+                
+                scope.add(item.variable.value)
+                code, var_map, stack_offset = item.compile(var_map, stack_offset)
+                res += code
+            else:
+                code, _, _ = item.compile(var_map, stack_offset)
+                res += code
+
+        if len(scope) > 0 and not self.function:
+            dealocated = len(scope) * 8
+            
+            res += f"\tadd rsp, {dealocated}\n"
+            stack_offset -= dealocated
+        
+        return res, var_map, stack_offset
 
 
 class Function():
-    def __init__(self, name: str, body: List[Statement]) -> None:
+    def __init__(self, name: str, body: Compound) -> None:
         self.name = name
         self.body = body
 
 
     def compile(self) -> str:
+        var_map = dict()
+        stack_offset = 0
+
         res = f"{self.name}:\n"
 
         res += "\tpush rbp\n"
         res += "\tmov rbp, rsp\n"
 
-        for statement in self.body:
-            res += statement.compile()
+        code, var_map, stack_offset = self.body.compile(var_map, stack_offset)
+
+        res += code
 
         res += ".Le:\n"
 
-        global variable_offset
-
-        if variable_offset > 0:
-            res += f"\tadd rsp, {variable_offset}\n"
-            variable_offset = 0
+        if stack_offset > 0:
+            res += f"\tadd rsp, {stack_offset}\n"
 
         res += "\tpop rbp\n"
         res += "\tret\n"
@@ -352,6 +390,13 @@ class SyntaxTree():
         return self.get_current().type == type
 
     
+    def check_keyword(self) -> str | None:
+        if self.get_current().type == TokType.KEYWORD:
+            return self.get_current().value
+        
+        return None
+
+    
     def program(self) -> Program:
         return Program(self.function())
     
@@ -367,25 +412,26 @@ class SyntaxTree():
 
         self.match_token(TokType.OPEN_BRACE)
 
-        body = list()
+        block = list()
 
         while not self.check_token(TokType.CLOSE_BRACE):
-            body.append(self.block_item())
+            block.append(self.block_item())
 
         self.match_token(TokType.CLOSE_BRACE)
+
+        body = Compound(block, True)
 
         return Function(identifier.value, body)
     
 
     def block_item(self):
-        if self.match_token(TokType.KEYWORD):
-            keyword = self.get_previous()
+        keyword = self.check_keyword()
 
-            if keyword.value == "int":
-                return self.declaration()
-            
-            self.rewind()
-            
+        if keyword == "int":
+            self.consume(TokType.KEYWORD)
+
+            return self.declaration()
+
         return self.statement()
 
 
@@ -403,7 +449,7 @@ class SyntaxTree():
         return Declare(identifier, exp)
     
 
-    def statement(self) -> Statement:
+    def statement(self):
         if self.match_token(TokType.KEYWORD):
             keyword = self.get_previous()
 
@@ -437,6 +483,15 @@ class SyntaxTree():
 
                     return Conditional(exp, if_block, else_block)
 
+        if self.match_token(TokType.OPEN_BRACE):
+            block = list()
+
+            while not self.check_token(TokType.CLOSE_BRACE):
+                block.append(self.block_item())
+
+            self.match_token(TokType.CLOSE_BRACE)
+
+            return Compound(block, False)
 
         exp = self.expression()
         self.consume(TokType.SEMICOLON)
@@ -596,7 +651,7 @@ def lex(file: TextIO) -> List[Token]:
                 
                 value = int(line[0:cursor+1]) 
             elif line[cursor].isalpha():
-                word = re.search("[a-zA-Z]\w*", line)
+                word = re.search("[a-zA-Z]\\w*", line)
 
                 if word is None:
                     line = line[cursor+1:]
