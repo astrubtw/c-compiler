@@ -3,11 +3,21 @@ import copy
 from typing import List
 from errors import VariableDefinedError
 from tokenclass import TokType, Token
+from dataclasses import dataclass
 
 
 def get_label() -> str:
     get_label.index = getattr(get_label, 'index', 0) + 1
     return ".L" + str(get_label.index)
+
+
+@dataclass
+class Context():
+    var_map: dict
+    stack_offset: int = 0
+    max_stack_offset: int = 0
+    loop_exit: str = None
+
 
 
 class AstNode(abc.ABC):
@@ -123,6 +133,11 @@ class Return(AstNode):
     def compile(self, var_map, stack_offset):
         res, var_map, stack_offset = self.exp.compile(var_map, stack_offset)
 
+        if stack_offset > 0:
+            deallocated = stack_offset
+            res += f"\tadd rsp, {deallocated}\n"
+            stack_offset -= deallocated
+
         res += "\tjmp .Le\n"
 
         return res, var_map, stack_offset
@@ -225,6 +240,149 @@ class Conditional(AstNode):
         res += label_end + ":\n"
 
         return res, var_map, stack_offset
+    
+
+class For(AstNode):
+    def __init__(self, exp: AstNode, condition: AstNode, control: AstNode, block: AstNode):
+        self.exp = exp
+        self.condition = condition
+        self.control = control
+        self.block = block
+
+
+    def compile(self, var_map, stack_offset):
+        # EXPRESSION
+        code, var_map, stack_offset = self.exp.compile(var_map, stack_offset)
+        res = code
+
+        loop_label = get_label()
+        condition_label = get_label()
+
+        res += "\tjmp " + condition_label + "\n"
+
+        # LOOP
+        res += loop_label + ":\n"
+        code, var_map, stack_offset = self.block.compile(var_map, stack_offset)
+        res += code
+
+        # CONTROL
+        code, var_map, stack_offset = self.control.compile(var_map, stack_offset)
+        res += code
+
+        # CONDITION
+        res += condition_label + ":\n"
+        
+        code, var_map, stack_offset = self.condition.compile(var_map, stack_offset)
+        res += code
+        res += "\ttest al, al\n"
+        res += "\tjnz " + loop_label + "\n"
+
+        return res, var_map, stack_offset
+
+    
+
+class ForDecl(AstNode):
+    def __init__(self, declaration: AstNode, condition: AstNode, control: AstNode, block: AstNode):
+        self.declaration = declaration
+        self.condition = condition
+        self.control = control
+        self.block = block
+
+    def compile(self, var_map, stack_offset):
+        # DECLARATION
+        code, var_map, stack_offset = self.declaration.compile(var_map, stack_offset)
+        res = code
+
+        loop_label = get_label()
+        condition_label = get_label()
+
+        res += "\tjmp " + condition_label + "\n"
+
+        # LOOP
+        res += loop_label + ":\n"
+        code, var_map, stack_offset = self.block.compile(var_map, stack_offset)
+        res += code
+
+        # CONTROL
+        code, var_map, stack_offset = self.control.compile(var_map, stack_offset)
+        res += code
+
+        # CONDITION
+        res += condition_label + ":\n"
+        
+        code, var_map, stack_offset = self.condition.compile(var_map, stack_offset)
+        res += code
+        res += "\ttest al, al\n"
+        res += "\tjnz " + loop_label + "\n"
+
+        deallocated = 8
+        res += f"\tadd rsp, {deallocated}\n"
+        stack_offset -= deallocated
+
+        return res, var_map, stack_offset
+        
+
+
+class While(AstNode):
+    def __init__(self, condition: AstNode, block: AstNode) -> None:
+        self.block = block
+        self.condition = condition
+
+    def compile(self, var_map, stack_offset):
+        loop_label = get_label()
+        condition_label = get_label()
+
+        res = "\tjmp " + condition_label + "\n"
+
+        # LOOP
+        res += loop_label + ":\n"
+        code, var_map, stack_offset = self.block.compile(var_map, stack_offset)
+        res += code
+
+        # CONDITION
+        res += condition_label + ":\n"
+        
+        code, var_map, stack_offset = self.condition.compile(var_map, stack_offset)
+        res += code
+        res += "\ttest al, al\n"
+        res += "\tjnz " + loop_label + "\n"
+
+        return res, var_map, stack_offset
+
+
+class DoLoop(AstNode):
+    def __init__(self, condition: AstNode, block: List) -> None:
+        self.block = block
+        self.condition = condition
+
+    def compile(self, var_map, stack_offset):
+        loop_label = get_label()
+        condition_label = get_label()
+
+        # LOOP
+        res = loop_label + ":\n"
+        code, var_map, stack_offset = self.block.compile(var_map, stack_offset)
+        res += code
+
+        # CONDITION
+        res += condition_label + ":\n"
+        
+        code, var_map, stack_offset = self.condition.compile(var_map, stack_offset)
+        res += code
+        res += "\ttest al, al\n"
+        res += "\tjnz " + loop_label + "\n"
+
+        return res, var_map, stack_offset
+
+
+class Break(AstNode):
+    def compile(self, var_map, stack_offset):
+        return super().compile(var_map, stack_offset)
+
+
+class Continue(AstNode):
+    def compile(self, var_map, stack_offset):
+        return super().compile(var_map, stack_offset)
 
 
 class Compound(AstNode):
@@ -278,8 +436,8 @@ class Function():
 
         res += ".Le:\n"
 
-        if stack_offset > 0:
-            res += f"\tadd rsp, {stack_offset}\n"
+        #if stack_offset > 0:
+        #    res += f"\tadd rsp, {stack_offset}\n"
 
         res += "\tpop rbp\n"
         res += "\tret\n"

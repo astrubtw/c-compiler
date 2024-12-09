@@ -3,7 +3,7 @@ import re
 import subprocess
 from tokenclass import TokType, Token
 
-from astnodes import Constant, UnaryOperator, BinaryOperator, Return, Declare, Variable, Assign, Conditional, Compound, Function, Program
+from astnodes import Break, Constant, Continue, DoLoop, For, ForDecl, UnaryOperator, BinaryOperator, Return, Declare, Variable, Assign, Conditional, Compound, Function, Program, While
 
 
 class SyntaxTree():
@@ -62,6 +62,13 @@ class SyntaxTree():
             return self.get_current().value
         
         return None
+    
+
+    def check_keyword_val(self, value: str) -> bool:
+        if self.get_current().type == TokType.KEYWORD:
+            return self.get_current().value == value
+        
+        return False
 
     
     def program(self) -> Program:
@@ -149,6 +156,70 @@ class SyntaxTree():
                     else_block = self.statement()
 
                     return Conditional(exp, if_block, else_block)
+                
+
+                case "for":
+                    self.consume(TokType.OPEN_PAREN)
+
+                    declaration = False
+                    first_exp = None
+
+                    if self.check_keyword_val("int"):
+                        self.consume(TokType.KEYWORD)
+                        first_exp = self.declaration()
+                        declaration = True
+                    else:
+                        first_exp = self.expression_option()
+                        self.consume(TokType.SEMICOLON)
+
+                    second_exp = self.expression_option()
+                    self.consume(TokType.SEMICOLON)
+
+                    third_exp = self.expression_option()
+
+                    self.consume(TokType.CLOSE_PAREN)
+
+                    inner = self.statement()
+
+                    if declaration:
+                        return ForDecl(first_exp, second_exp, third_exp, inner)
+
+                    return For(first_exp, second_exp, third_exp, inner)
+
+
+                case "while":
+                    self.consume(TokType.OPEN_PAREN)
+                    exp = self.expression()
+                    self.consume(TokType.CLOSE_PAREN)
+
+                    inner = self.statement()
+
+                    return While(exp, inner)
+
+                case "do":
+                    inner = self.statement()
+
+                    if not self.check_keyword_val("while"):
+                        self.error("Missing while keyword")
+
+                    self.consume(TokType.KEYWORD)
+
+                    self.consume(TokType.OPEN_PAREN)
+                    exp = self.expression()
+                    self.consume(TokType.CLOSE_PAREN)
+                    self.consume(TokType.SEMICOLON)
+
+                    return DoLoop(exp, inner)
+                
+                case "break":
+                    self.consume(TokType.SEMICOLON)
+                    return Break()
+
+                case "continue":
+                    self.consume(TokType.SEMICOLON)
+                    return Continue()
+                
+
 
         if self.match_token(TokType.OPEN_BRACE):
             block = list()
@@ -160,10 +231,17 @@ class SyntaxTree():
 
             return Compound(block, False)
 
-        exp = self.expression()
+        exp = self.expression_option()
         self.consume(TokType.SEMICOLON)
 
         return exp
+    
+
+    def expression_option(self):
+        if self.get_current().type == TokType.SEMICOLON or self.get_current().type == TokType.CLOSE_PAREN:
+            return Constant(1)
+        
+        return self.expression()
 
     
     def expression(self):
@@ -275,22 +353,32 @@ def compile_tree(ast: SyntaxTree):
     file = open("assembly.asm", "w")
     file.write("section .text\n\nglobal _start\n\n")
 
-    text = ast.root.entry.compile()
-    file.write(text)
+    code = None
+    failed = False
+
+    try:
+        code = ast.root.entry.compile()
+    except Exception as e:
+        print(e.__class__)
+        failed = True
+
+    if code:
+        file.write(code)
 
     file.write("_start:\n\tcall main\n\tmov rdi, rax\n\tmov rax, 60\n\tsyscall")
-
     file.close()
 
-    subprocess.run(["nasm", "-g", "-felf64", "assembly.asm"])
-    subprocess.run(["ld", "-o", "assembly", "assembly.o"])
+    if not failed:
+        subprocess.run(["nasm", "-g", "-felf64", "assembly.asm"])
+        subprocess.run(["ld", "-o", "assembly", "assembly.o"])
+        
 
 
 def lex(file: TextIO) -> List[Token]:
     output = list()
     operators = ["{", "}", "(", ")", ";", "-", "~", "!", "+", "*", "/", "<", ">", "%", "="]
     operators_two = ["&&", "||", "==", "!=", "<=", ">="]
-    keywords = ["return", "int", "if", "else"]
+    keywords = ["return", "int", "if", "else", "for", "while", "do", "break", "continue"]
 
     for line in file:
         line = line.strip("\n")
