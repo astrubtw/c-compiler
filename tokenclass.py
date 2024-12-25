@@ -1,4 +1,3 @@
-
 from enum import Enum, auto
 
 
@@ -20,7 +19,7 @@ class TokType(Enum):
     MODULO = auto()
     ASSIGNMENT = auto()
     COMMA = auto()
-    
+
     # TWO CHAR OPERATORS
     AND = auto()
     OR = auto()
@@ -36,13 +35,13 @@ class TokType(Enum):
     EOF = auto()
 
 
-class Token():
-    def __init__(self, type_: TokType, value: int | str = None) -> None:
+class Token:
+    def __init__(self, type_: TokType, value: int | str | None = None) -> None:
         self.type = type_
         self.value = value
 
     def __repr__(self) -> str:
         if self.value:
             return f"{self.type.name}[{self.value}]"
-        
+
         return f"{self.type.name}"
