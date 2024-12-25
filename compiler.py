@@ -3,7 +3,7 @@ import re
 import subprocess
 from tokenclass import TokType, Token
 
-from astnodes import Break, Constant, Continue, DoLoop, For, ForDecl, UnaryOperator, BinaryOperator, Return, Declare, Variable, Assign, Conditional, Compound, Function, Program, While
+from astnodes import Break, Constant, Continue, DoLoop, For, ForDecl, FunctionCall, UnaryOperator, BinaryOperator, Return, Declare, Variable, Assign, Conditional, Compound, Function, Program, While
 
 
 class SyntaxTree():
@@ -72,7 +72,12 @@ class SyntaxTree():
 
     
     def program(self) -> Program:
-        return Program(self.function())
+        functions = list()
+
+        while not self.match_token(TokType.EOF):
+            functions.append(self.function())
+
+        return Program(functions)
     
 
     def function(self) -> Function:
@@ -337,6 +342,11 @@ class SyntaxTree():
         
         if self.match_token(TokType.IDENTIFIER):
             identifier = self.get_previous()
+
+            if self.match_token(TokType.OPEN_PAREN):
+                self.consume(TokType.CLOSE_PAREN)
+                return FunctionCall(identifier.value)
+
             return Variable(identifier)
 
         if self.match_token(TokType.BITW_COMPLIMENT, TokType.MINUS, TokType.LOGIC_NEGATION):
@@ -357,7 +367,7 @@ def compile_tree(ast: SyntaxTree):
     failed = False
 
     try:
-        code = ast.root.entry.compile()
+        code = ast.root.compile()
     except Exception as e:
         print(e.__class__)
         failed = True
@@ -376,7 +386,7 @@ def compile_tree(ast: SyntaxTree):
 
 def lex(file: TextIO) -> List[Token]:
     output = list()
-    operators = ["{", "}", "(", ")", ";", "-", "~", "!", "+", "*", "/", "<", ">", "%", "="]
+    operators = ["{", "}", "(", ")", ";", "-", "~", "!", "+", "*", "/", "<", ">", "%", "=", ","]
     operators_two = ["&&", "||", "==", "!=", "<=", ">="]
     keywords = ["return", "int", "if", "else", "for", "while", "do", "break", "continue"]
 
@@ -431,6 +441,8 @@ def lex(file: TextIO) -> List[Token]:
 
             output.append(Token(token_type, value))
             line = line[cursor+1:]
+
+    output.append(Token(TokType.EOF))
 
     return output
 

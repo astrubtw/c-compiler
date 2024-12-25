@@ -440,11 +440,27 @@ class Function():
         #    res += f"\tadd rsp, {stack_offset}\n"
 
         res += "\tpop rbp\n"
-        res += "\tret\n"
+        res += "\tret\n\n"
 
         return res
+    
+
+class FunctionCall(AstNode):
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+    def compile(self, var_map, stack_offset) -> str:
+        return f"\tcall {self.name}\n", var_map, stack_offset
 
 
 class Program():
-    def __init__(self, entry: Function) -> None:
-        self.entry = entry
+    def __init__(self, functions: List[Function]) -> None:
+        self.functions = functions
+
+    def compile(self):
+        res = ""
+        for func in self.functions:
+            res += func.compile()
+        
+        return res

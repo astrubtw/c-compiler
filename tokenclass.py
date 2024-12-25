@@ -19,6 +19,7 @@ class TokType(Enum):
     GREATER = auto()
     MODULO = auto()
     ASSIGNMENT = auto()
+    COMMA = auto()
     
     # TWO CHAR OPERATORS
     AND = auto()
@@ -32,6 +33,7 @@ class TokType(Enum):
     KEYWORD = auto()
     IDENTIFIER = auto()
     INT_LITERAL = auto()
+    EOF = auto()
 
 
 class Token():
