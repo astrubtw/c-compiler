@@ -182,7 +182,10 @@ class Variable(AstNode):
 
         offset = var_map[identifier]
 
-        res = f"\tmov rax, [rbp - {offset}]\n"
+        if offset > 0:
+            res = f"\tmov rax, [rbp - {offset}]\n"
+        else:
+            res = f"\tmov rax, [rbp + {-offset}]\n"
 
         return res, var_map, stack_offset
 
@@ -429,13 +432,19 @@ class Compound(AstNode):
 
 
 class Function:
-    def __init__(self, name: str, body: Compound) -> None:
+    def __init__(self, name: str, body: Compound, args: List[str]) -> None:
         self.name = name
         self.body = body
+        self.args = args
 
     def compile(self) -> str:
         var_map = dict()
         stack_offset = 0
+
+        offset = -16
+        for arg in self.args:
+            var_map[arg] = offset
+            offset -= 8
 
         res = f"{self.name}:\n"
 
@@ -458,12 +467,26 @@ class Function:
 
 
 class FunctionCall(AstNode):
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, args) -> None:
         self.name = name
+        self.args = args
 
     @override
     def compile(self, var_map, stack_offset):
-        return f"\tcall {self.name}\n", var_map, stack_offset
+        args_bytes = 8 * len(self.args)
+        res = ""
+
+        self.args.reverse()
+
+        for arg in self.args:
+            code, var_map, stack_offset = arg.compile(var_map, stack_offset)
+            res += code
+            res += "\tpush rax\n"
+
+        res += f"\tcall {self.name}\n"
+        res += f"\tadd rsp, {args_bytes}\n"
+
+        return res, var_map, stack_offset
 
 
 class Program:

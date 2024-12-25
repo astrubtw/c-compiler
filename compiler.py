@@ -87,14 +87,38 @@ class SyntaxTree:
 
         return Program(functions)
 
+    def function_args(self):
+        self.consume(TokType.OPEN_PAREN)
+
+        args = list()
+
+        if self.match_token(TokType.CLOSE_PAREN):
+            return args
+
+        self.check_keyword_val("int")
+        self.consume(TokType.KEYWORD)
+
+        self.consume(TokType.IDENTIFIER)
+        args.append(self.get_previous().value)
+
+        while self.match_token(TokType.COMMA):
+            self.check_keyword_val("int")
+            self.consume(TokType.KEYWORD)
+
+            self.consume(TokType.IDENTIFIER)
+            args.append(self.get_previous().value)
+
+        self.consume(TokType.CLOSE_PAREN)
+        return args
+
     def function(self) -> Function:
         self.match_token(TokType.KEYWORD)
 
         self.match_token(TokType.IDENTIFIER)
         identifier = self.get_previous()
 
-        self.match_token(TokType.OPEN_PAREN)
-        self.match_token(TokType.CLOSE_PAREN)
+        args = self.function_args()
+        print(str(identifier.value) + ": " + str(args))
 
         self.match_token(TokType.OPEN_BRACE)
 
@@ -107,7 +131,7 @@ class SyntaxTree:
 
         body = Compound(block, True)
 
-        return Function(str(identifier.value), body)
+        return Function(str(identifier.value), body, args)
 
     def block_item(self):
         keyword = self.check_keyword()
@@ -342,8 +366,7 @@ class SyntaxTree:
             identifier = self.get_previous()
 
             if self.match_token(TokType.OPEN_PAREN):
-                self.consume(TokType.CLOSE_PAREN)
-                return FunctionCall(str(identifier.value))
+                return self.function_call(identifier)
 
             return Variable(identifier)
 
@@ -361,6 +384,21 @@ class SyntaxTree:
             + " Index: "
             + str(self.current)
         )
+
+    def function_call(self, identifier):
+        args = list()
+
+        if self.match_token(TokType.CLOSE_PAREN):
+            return FunctionCall(str(identifier.value), args)
+
+        args.append(self.expression())
+
+        while self.match_token(TokType.COMMA):
+            args.append(self.expression())
+
+        self.consume(TokType.CLOSE_PAREN)
+        print(args)
+        return FunctionCall(str(identifier.value), args)
 
 
 def compile_tree(ast: SyntaxTree):
