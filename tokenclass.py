@@ -35,10 +35,44 @@ class TokType(Enum):
     EOF = auto()
 
 
+def convert_to_char(token: TokType):
+    repr = [
+        "{",
+        "}",
+        "(",
+        ")",
+        ";",
+        "-",
+        "~",
+        "!",
+        "+",
+        "*",
+        "/",
+        "<",
+        ">",
+        "%",
+        "=",
+        ",",
+        "&&",
+        "||",
+        "==",
+        "<=",
+        ">=",
+    ]
+    val = token.value - 1
+    if val > len(repr):
+        return ""
+
+    return repr[val]
+
+
 class Token:
-    def __init__(self, type_: TokType, value: int | str | None = None) -> None:
+    def __init__(
+        self, type_: TokType, line: int, value: int | str | None = None
+    ) -> None:
         self.type = type_
         self.value = value
+        self.line = line
 
     def __repr__(self) -> str:
         if self.value:

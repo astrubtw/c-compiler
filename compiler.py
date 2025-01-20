@@ -1,7 +1,7 @@
 from typing import TextIO, List
 import re
 import subprocess
-from tokenclass import TokType, Token
+from tokenclass import TokType, Token, convert_to_char
 
 from astnodes import (
     Break,
@@ -62,7 +62,12 @@ class SyntaxTree:
 
     def consume(self, token: TokType):
         if not self.match_token(token):
-            self.error("Expected token: " + token.name)
+            self.error(
+                "Expected token at line "
+                + str(self.get_current().line)
+                + ": "
+                + convert_to_char(token)
+            )
 
     def check_token(self, type: TokType) -> bool:
         return self.get_current().type == type
@@ -112,22 +117,22 @@ class SyntaxTree:
         return args
 
     def function(self) -> Function:
-        self.match_token(TokType.KEYWORD)
+        self.consume(TokType.KEYWORD)
 
-        self.match_token(TokType.IDENTIFIER)
+        self.consume(TokType.IDENTIFIER)
         identifier = self.get_previous()
 
         args = self.function_args()
         print(str(identifier.value) + ": " + str(args))
 
-        self.match_token(TokType.OPEN_BRACE)
+        self.consume(TokType.OPEN_BRACE)
 
         block = list()
 
         while not self.check_token(TokType.CLOSE_BRACE):
             block.append(self.block_item())
 
-        self.match_token(TokType.CLOSE_BRACE)
+        self.consume(TokType.CLOSE_BRACE)
 
         body = Compound(block, True)
 
@@ -402,10 +407,7 @@ class SyntaxTree:
 
 
 def compile_tree(ast: SyntaxTree):
-    file = open("assembly.asm", "w")
-    file.write("section .text\n\nglobal _start\n\n")
-
-    code = None
+    code = ""
     failed = False
 
     try:
@@ -414,14 +416,16 @@ def compile_tree(ast: SyntaxTree):
         print(e.__class__)
         failed = True
 
-    if code:
-        file.write(code)
+    if failed:
+        return
+
+    file = open("assembly.asm", "w")
+    file.write("section .text\n\nglobal _start\n\n")
+
+    file.write(code)
 
     file.write("_start:\n\tcall main\n\tmov rdi, rax\n\tmov rax, 60\n\tsyscall")
     file.close()
-
-    if failed:
-        return
 
     asmcomp = subprocess.run(["nasm", "-g", "-felf64", "assembly.asm"])
 
@@ -467,7 +471,7 @@ def lex(file: TextIO) -> List[Token]:
         "continue",
     ]
 
-    for line in file:
+    for n, line in enumerate(file):
         line = line.strip("\n")
         line = line.lstrip()
 
@@ -516,10 +520,10 @@ def lex(file: TextIO) -> List[Token]:
 
             assert token_type is not None, "Unknown token"
 
-            output.append(Token(token_type, value))
+            output.append(Token(token_type, n, value))
             line = line[cursor + 1 :]
 
-    output.append(Token(TokType.EOF))
+    output.append(Token(TokType.EOF, -1))
 
     return output
 

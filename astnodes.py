@@ -12,14 +12,6 @@ def get_label() -> str:
     return ".L" + str(attr)
 
 
-@dataclass
-class Context:
-    var_map: dict
-    stack_offset: int = 0
-    max_stack_offset: int = 0
-    loop_exit: str = ""
-
-
 class AstNode(abc.ABC):
     @abc.abstractmethod
     def compile(self, var_map: dict, stack_offset: int) -> tuple[str, dict, int]:
