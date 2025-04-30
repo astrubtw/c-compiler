@@ -1,3 +1,4 @@
+from sys import argv
 from typing import TextIO, List
 import re
 import subprocess
@@ -402,7 +403,7 @@ class SyntaxTree:
             args.append(self.expression())
 
         self.consume(TokType.CLOSE_PAREN)
-        print(args)
+        # print(args)
         return FunctionCall(str(identifier.value), args)
 
 
@@ -436,6 +437,7 @@ def compile_tree(ast: SyntaxTree):
 
     program = subprocess.run("./assembly")
     print("Return code: " + str(program.returncode))
+    return program.returncode
 
 
 def lex(file: TextIO) -> List[Token]:
@@ -528,14 +530,27 @@ def lex(file: TextIO) -> List[Token]:
     return output
 
 
-if __name__ == "__main__":
-    file = open("return_2.c", "r")
+def compile_file(name: str):
+    file = open(name, "r")
 
     tokens = lex(file)
-    print(tokens)
 
     file.close()
 
     ast = SyntaxTree(tokens)
 
     compile_tree(ast)
+
+
+if __name__ == "__main__":
+    pattern = re.compile(r"^.*\.c$", re.IGNORECASE)
+
+    if len(argv) <= 1:
+        print("Please specify .c file for compilation")
+        exit(1)
+
+    if not pattern.match(argv[1]):
+        print("This is not a .c file")
+        exit(1)
+
+    compile_file(argv[1])

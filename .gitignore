@@ -1,5 +1,5 @@
 assembly*
 old_compiler.py
-*.c
+/*.c
 *.txt
 __pycache__
